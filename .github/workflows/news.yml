@@ -1,6 +1,7 @@
-name: Rocket League News Webhook
+name: GGNews Rocket League
 
 on:
+
   schedule:
     - cron: "*/15 * * * *"
 
@@ -10,8 +11,11 @@ permissions:
   contents: write
 
 concurrency:
+
   group: rocket-league-news
+
   cancel-in-progress: false
+
 
 jobs:
 
@@ -19,31 +23,69 @@ jobs:
 
     runs-on: ubuntu-latest
 
-    timeout-minutes: 5
+    timeout-minutes: 10
 
     steps:
 
-      - name: Checkout
+
+      # ----------------------------------------
+      # Checkout
+      # ----------------------------------------
+
+      - name: Checkout repository
+
         uses: actions/checkout@v4
 
+
+      # ----------------------------------------
+      # Python
+      # ----------------------------------------
+
       - name: Setup Python
+
         uses: actions/setup-python@v5
 
         with:
+
           python-version: "3.12"
 
+
+      # ----------------------------------------
+      # Dependencies
+      # ----------------------------------------
+
       - name: Install dependencies
+
         run: |
+
           pip install -r requirements.txt
 
-      - name: Send Rocket League News
+
+      # ----------------------------------------
+      # Run News Engine
+      # ----------------------------------------
+
+      - name: Run GGNews Rocket League
+
         env:
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+
+          DISCORD_WEBHOOK_URL:
+            ${{ secrets.DISCORD_WEBHOOK_URL }}
+
+          GEMINI_API_KEY:
+            ${{ secrets.GEMINI_API_KEY }}
 
         run: |
+
           python send_news.py
 
-      - name: Save News History
+
+      # ----------------------------------------
+      # Save History
+      # ----------------------------------------
+
+      - name: Save news history
+
         run: |
 
           git config user.name "github-actions[bot]"
@@ -52,6 +94,6 @@ jobs:
 
           git add data/sent.json
 
-          git diff --cached --quiet || git commit -m "Update news history"
+          git diff --cached --quiet || git commit -m "Update Rocket League news history"
 
           git push
