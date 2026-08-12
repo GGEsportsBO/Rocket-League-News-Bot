@@ -2,11 +2,9 @@ name: GGNews Rocket League
 
 on:
 
-  # فحص مرة كل ساعة
   schedule:
     - cron: "0 * * * *"
 
-  # يسمح لك بتشغيله يدوياً
   workflow_dispatch:
 
 
@@ -32,18 +30,10 @@ jobs:
     steps:
 
 
-      # ==========================================
-      # تحميل المشروع
-      # ==========================================
-
       - name: Checkout
 
         uses: actions/checkout@v4
 
-
-      # ==========================================
-      # Python
-      # ==========================================
 
       - name: Setup Python
 
@@ -54,10 +44,6 @@ jobs:
           python-version: "3.12"
 
 
-      # ==========================================
-      # تثبيت المكتبات
-      # ==========================================
-
       - name: Install dependencies
 
         run: |
@@ -65,28 +51,18 @@ jobs:
           pip install -r requirements.txt
 
 
-      # ==========================================
-      # تشغيل محرك الأخبار
-      # ==========================================
-
       - name: Run GGNews Rocket League
 
         env:
 
-          DISCORD_WEBHOOK_URL:
-            ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
 
-          GEMINI_API_KEY:
-            ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 
         run: |
 
           python send_news.py
 
-
-      # ==========================================
-      # حفظ سجل الأخبار
-      # ==========================================
 
       - name: Save news history
 
