@@ -2,10 +2,11 @@ import os
 import re
 import json
 import time
+import calendar
 import requests
 import feedparser
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from urllib.parse import urlparse
 
 
@@ -16,8 +17,6 @@ from urllib.parse import urlparse
 DISCORD_WEBHOOK_URL = os.environ["DISCORD_WEBHOOK_URL"]
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 
-# Gemini Flash-Lite is optimized for high-volume text processing
-# and currently has a free tier.
 GEMINI_MODEL = "gemini-3.1-flash-lite"
 
 GEMINI_URL = (
@@ -30,7 +29,13 @@ GEMINI_URL = (
 # SETTINGS
 # =========================================================
 
+# نفحص آخر 24 ساعة فقط
+NEWS_WINDOW_HOURS = 24
+
+# الحد الأقصى للأخبار في كل تشغيل
 MAX_ARTICLES_PER_RUN = 6
+
+# عدد الروابط المحفوظة لمنع التكرار
 HISTORY_LIMIT = 500
 
 HISTORY_FILE = "data/sent.json"
@@ -42,7 +47,6 @@ HISTORY_FILE = "data/sent.json"
 
 FEEDS = [
 
-    # Official Rocket League
     (
         "Rocket League Official",
         "https://news.google.com/rss/search?"
@@ -50,7 +54,6 @@ FEEDS = [
         "&hl=en-US&gl=US&ceid=US%3Aen"
     ),
 
-    # Official Competitive News
     (
         "Rocket League Competitive",
         "https://news.google.com/rss/search?"
@@ -58,7 +61,6 @@ FEEDS = [
         "&hl=en-US&gl=US&ceid=US%3Aen"
     ),
 
-    # RLCS
     (
         "RLCS",
         "https://news.google.com/rss/search?"
@@ -66,7 +68,6 @@ FEEDS = [
         "&hl=en-US&gl=US&ceid=US%3Aen"
     ),
 
-    # Players
     (
         "Rocket League Players",
         "https://news.google.com/rss/search?"
@@ -74,7 +75,6 @@ FEEDS = [
         "&hl=en-US&gl=US&ceid=US%3Aen"
     ),
 
-    # Teams / Organizations
     (
         "Rocket League Teams",
         "https://news.google.com/rss/search?"
@@ -82,7 +82,6 @@ FEEDS = [
         "&hl=en-US&gl=US&ceid=US%3Aen"
     ),
 
-    # Tournaments
     (
         "Rocket League Tournaments",
         "https://news.google.com/rss/search?"
@@ -90,7 +89,6 @@ FEEDS = [
         "&hl=en-US&gl=US&ceid=US%3Aen"
     ),
 
-    # Updates
     (
         "Rocket League Updates",
         "https://news.google.com/rss/search?"
@@ -98,7 +96,6 @@ FEEDS = [
         "&hl=en-US&gl=US&ceid=US%3Aen"
     ),
 
-    # Liquipedia / competitive ecosystem
     (
         "Liquipedia Rocket League",
         "https://news.google.com/rss/search?"
@@ -106,7 +103,6 @@ FEEDS = [
         "&hl=en-US&gl=US&ceid=US%3Aen"
     ),
 
-    # Community / competitive scene
     (
         "Rocket League Esports",
         "https://news.google.com/rss/search?"
@@ -117,7 +113,7 @@ FEEDS = [
 
 
 # =========================================================
-# RELEVANCE
+# KEYWORDS
 # =========================================================
 
 KEYWORDS = [
@@ -150,19 +146,19 @@ KEYWORDS = [
     "rocket league coach",
 
     "rlcs 2026",
+
 ]
 
 
 BLOCKED_KEYWORDS = [
 
-    # Remove this if you eventually want Sideswipe
     "rocket league sideswipe",
 
 ]
 
 
 # =========================================================
-# TEXT HELPERS
+# TEXT
 # =========================================================
 
 def clean_text(value):
@@ -184,13 +180,119 @@ def clean_text(value):
     return value.strip()
 
 
-def get_source(link, fallback):
+# =========================================================
+# DATE / TIME
+# =========================================================
+
+def get_article_datetime(entry):
+
+    """
+    يحاول الحصول على تاريخ نشر الخبر.
+    إذا لم يوجد، يحاول استخدام تاريخ التحديث.
+    إذا لم يوجد أي تاريخ، يرجع None.
+    """
+
+    parsed_date = (
+        entry.get("published_parsed")
+        or entry.get("updated_parsed")
+    )
+
+    if not parsed_date:
+
+        return None
 
     try:
 
-        host = urlparse(link).netloc
+        timestamp = calendar.timegm(
+            parsed_date
+        )
 
-        host = host.lower()
+        return datetime.fromtimestamp(
+            timestamp,
+            tz=timezone.utc
+        )
+
+    except Exception:
+
+        return None
+
+
+def is_within_last_24_hours(entry):
+
+    article_date = get_article_datetime(
+        entry
+    )
+
+    # إذا الخبر لا يحتوي على تاريخ واضح
+    # نتجاهله بدلاً من المخاطرة بإرسال خبر قديم
+    if article_date is None:
+
+        return False
+
+    now = datetime.now(
+        timezone.utc
+    )
+
+    age = now - article_date
+
+    # الأخبار المستقبلية يتم تجاهلها
+    if age.total_seconds() < 0:
+
+        return False
+
+    # أقدم من 24 ساعة = تجاهل
+    if age > timedelta(
+        hours=NEWS_WINDOW_HOURS
+    ):
+
+        return False
+
+    return True
+
+
+def article_age_text(entry):
+
+    article_date = get_article_datetime(
+        entry
+    )
+
+    if not article_date:
+
+        return "Unknown"
+
+    now = datetime.now(
+        timezone.utc
+    )
+
+    age = now - article_date
+
+    minutes = int(
+        age.total_seconds() / 60
+    )
+
+    if minutes < 60:
+
+        return f"{minutes} دقيقة"
+
+    hours = minutes // 60
+
+    return f"{hours} ساعة"
+
+
+# =========================================================
+# SOURCE
+# =========================================================
+
+def get_source(
+    link,
+    fallback
+):
+
+    try:
+
+        host = urlparse(
+            link
+        ).netloc.lower()
 
         host = host.replace(
             "www.",
@@ -204,17 +306,29 @@ def get_source(link, fallback):
         return fallback
 
 
+# =========================================================
+# RELEVANCE
+# =========================================================
+
 def is_relevant(entry):
 
     title = clean_text(
-        entry.get("title", "")
+        entry.get(
+            "title",
+            ""
+        )
     ).lower()
 
     summary = clean_text(
-        entry.get("summary", "")
+        entry.get(
+            "summary",
+            ""
+        )
     ).lower()
 
-    text = f"{title} {summary}"
+    text = (
+        f"{title} {summary}"
+    )
 
     for blocked in BLOCKED_KEYWORDS:
 
@@ -294,7 +408,7 @@ def fetch_articles():
         try:
 
             print(
-                f"[RSS] {feed_name}"
+                f"[RSS] Checking: {feed_name}"
             )
 
             feed = feedparser.parse(
@@ -303,10 +417,40 @@ def fetch_articles():
 
             for entry in feed.entries:
 
+                # -----------------------------------------
+                # 1. Rocket League relevance
+                # -----------------------------------------
+
                 if not is_relevant(
                     entry
                 ):
+
                     continue
+
+                # -----------------------------------------
+                # 2. LAST 24 HOURS
+                # -----------------------------------------
+
+                if not is_within_last_24_hours(
+                    entry
+                ):
+
+                    title = clean_text(
+                        entry.get(
+                            "title",
+                            ""
+                        )
+                    )
+
+                    print(
+                        f"[OLD] Ignored: {title}"
+                    )
+
+                    continue
+
+                # -----------------------------------------
+                # 3. Unique in this run
+                # -----------------------------------------
 
                 link = entry.get(
                     "link",
@@ -326,12 +470,16 @@ def fetch_articles():
                 )
 
                 if not key:
+
                     continue
 
                 if key in seen:
+
                     continue
 
-                seen.add(key)
+                seen.add(
+                    key
+                )
 
                 articles.append(
                     (
@@ -343,14 +491,15 @@ def fetch_articles():
         except Exception as error:
 
             print(
-                f"[RSS ERROR] {feed_name}: {error}"
+                f"[RSS ERROR] "
+                f"{feed_name}: {error}"
             )
 
     return articles
 
 
 # =========================================================
-# IMAGE EXTRACTION
+# IMAGE
 # =========================================================
 
 def get_image(entry):
@@ -366,6 +515,7 @@ def get_image(entry):
                 )
 
                 if url:
+
                     return url
 
         if "media_thumbnail" in entry:
@@ -377,6 +527,7 @@ def get_image(entry):
                 )
 
                 if url:
+
                     return url
 
         if "enclosures" in entry:
@@ -388,6 +539,7 @@ def get_image(entry):
                 )
 
                 if url:
+
                     return url
 
     except Exception:
@@ -412,7 +564,7 @@ SYSTEM_PROMPT = """
 1. لا تخترع أي معلومة.
 2. لا تضف أسماء أو أرقام أو نتائج غير موجودة في المادة الأصلية.
 3. لا تقل "بحسب مصادر" إلا إذا كانت المادة نفسها تقول ذلك.
-4. إذا كان الخبر مجرد شائعة، صنفه "شائعة".
+4. إذا كان الخبر مجرد شائعة، صنفه "rumor".
 5. لا تقدم رأياً شخصياً.
 6. لا تستخدم ترجمة حرفية ركيكة.
 7. استخدم العربية الصحفية الحديثة.
@@ -420,13 +572,12 @@ SYSTEM_PROMPT = """
 9. حافظ على أسماء اللاعبين والفرق والمنظمات بالإنجليزية.
 10. Rocket League تكتب هكذا: Rocket League.
 11. RLCS تكتب هكذا: RLCS.
-12. لا تستخدم إيموجيات داخل العنوان أو الملخص.
+12. لا تستخدم إيموجيات داخل العنوان.
 13. الملخص من 2 إلى 4 جمل فقط.
 14. إذا كان الخبر متعلقاً بانتقال لاعب، ركز على اللاعب والفريق القديم والجديد إن كانت المعلومات متاحة.
 15. إذا كان متعلقاً ببطولة، اذكر البطولة والنتيجة أو المرحلة إن كانت موجودة.
 16. إذا كان Patch أو Update، اشرح أهم ما تغير فقط.
-17. إذا كان الخبر ضعيفاً أو غير مهم تحريرياً، اجعل importance = 1.
-18. الأخبار الكبرى مثل انتقال لاعب بارز، نهائي Major، فوز بطولة، إعلان RLCS أو تحديث ضخم يمكن أن تكون importance = 5.
+17. الأخبار الكبرى مثل انتقال لاعب بارز، نهائي Major، فوز بطولة، إعلان RLCS أو تحديث ضخم يمكن أن تكون importance = 5.
 
 التصنيفات المسموحة:
 
@@ -449,7 +600,7 @@ general
 4 = مهمة جداً
 5 = عاجلة / كبرى
 
-أعد JSON فقط بهذا الشكل:
+أعد JSON فقط:
 
 {
   "headline": "...",
@@ -469,8 +620,6 @@ def ask_gemini(
 ):
 
     prompt = f"""
-{SYSTEM_PROMPT}
-
 المصدر:
 {source}
 
@@ -489,10 +638,12 @@ def ask_gemini(
         "system_instruction": {
 
             "parts": [
+
                 {
                     "text":
                         SYSTEM_PROMPT
                 }
+
             ]
 
         },
@@ -575,27 +726,23 @@ def fallback_article(
     entry
 ):
 
-    title = clean_text(
-        entry.get(
-            "title",
-            "أخبار Rocket League"
-        )
-    )
-
-    summary = clean_text(
-        entry.get(
-            "summary",
-            "خبر جديد متعلق بـ Rocket League."
-        )
-    )
-
     return {
 
         "headline":
-            title,
+            clean_text(
+                entry.get(
+                    "title",
+                    "أخبار Rocket League"
+                )
+            ),
 
         "summary":
-            summary[:500],
+            clean_text(
+                entry.get(
+                    "summary",
+                    "خبر جديد متعلق بـ Rocket League."
+                )
+            )[:500],
 
         "category":
             "general",
@@ -612,60 +759,40 @@ def fallback_article(
 
 
 # =========================================================
-# CATEGORY
+# DISCORD
 # =========================================================
 
 CATEGORY_INFO = {
 
-    "player": (
-        "👤",
-        "لاعب"
-    ),
+    "player":
+        ("👤", "لاعب"),
 
-    "team": (
-        "🏢",
-        "فريق"
-    ),
+    "team":
+        ("🏢", "فريق"),
 
-    "transfer": (
-        "🔄",
-        "انتقالات"
-    ),
+    "transfer":
+        ("🔄", "انتقالات"),
 
-    "tournament": (
-        "🏆",
-        "بطولة"
-    ),
+    "tournament":
+        ("🏆", "بطولة"),
 
-    "result": (
-        "📊",
-        "نتائج"
-    ),
+    "result":
+        ("📊", "نتائج"),
 
-    "update": (
-        "🎮",
-        "تحديث"
-    ),
+    "update":
+        ("🎮", "تحديث"),
 
-    "rlcs": (
-        "🏆",
-        "RLCS"
-    ),
+    "rlcs":
+        ("🏆", "RLCS"),
 
-    "organization": (
-        "🏢",
-        "منظمة"
-    ),
+    "organization":
+        ("🏢", "منظمة"),
 
-    "rumor": (
-        "⚠️",
-        "شائعة"
-    ),
+    "rumor":
+        ("⚠️", "شائعة"),
 
-    "general": (
-        "📰",
-        "عام"
-    ),
+    "general":
+        ("📰", "عام"),
 
 }
 
@@ -715,10 +842,6 @@ CATEGORY_COLORS = {
 
 }
 
-
-# =========================================================
-# DISCORD
-# =========================================================
 
 def create_discord_payload(
     entry,
@@ -802,7 +925,6 @@ def create_discord_payload(
     fields = [
 
         {
-
             "name":
                 "التصنيف",
 
@@ -811,11 +933,9 @@ def create_discord_payload(
 
             "inline":
                 True
-
         },
 
         {
-
             "name":
                 "الأهمية",
 
@@ -826,11 +946,22 @@ def create_discord_payload(
 
             "inline":
                 True
-
         },
 
         {
+            "name":
+                "عمر الخبر",
 
+            "value":
+                article_age_text(
+                    entry
+                ),
+
+            "inline":
+                True
+        },
+
+        {
             "name":
                 "المصدر",
 
@@ -838,8 +969,7 @@ def create_discord_payload(
                 source,
 
             "inline":
-                True
-
+                False
         },
 
     ]
@@ -849,7 +979,6 @@ def create_discord_payload(
         fields.append(
 
             {
-
                 "name":
                     "الوسوم",
 
@@ -861,7 +990,6 @@ def create_discord_payload(
 
                 "inline":
                     False
-
             }
 
         )
@@ -885,10 +1013,8 @@ def create_discord_payload(
 
         "footer":
             {
-
                 "text":
                     "GGNews • Rocket League"
-
             },
 
         "timestamp":
@@ -908,20 +1034,15 @@ def create_discord_payload(
             "url": image
         }
 
-    payload = {
+    return {
 
         "username":
             "GGNews Rocket League",
-
-        "avatar_url":
-            "",
 
         "embeds":
             [embed]
 
     }
-
-    return payload
 
 
 def send_to_discord(
@@ -952,15 +1073,19 @@ def send_to_discord(
 def main():
 
     print(
-        "================================"
+        "========================================"
     )
 
     print(
-        "GGNews Rocket League News"
+        "GGNews Rocket League"
     )
 
     print(
-        "================================"
+        "Checking ONLY the last 24 hours"
+    )
+
+    print(
+        "========================================"
     )
 
     history = load_history()
@@ -968,7 +1093,8 @@ def main():
     articles = fetch_articles()
 
     print(
-        f"[INFO] Found {len(articles)} relevant articles."
+        f"[INFO] Articles from last 24h: "
+        f"{len(articles)}"
     )
 
     new_articles = []
@@ -994,6 +1120,10 @@ def main():
 
         if key in history:
 
+            print(
+                f"[DUPLICATE] {title}"
+            )
+
             continue
 
         new_articles.append(
@@ -1004,29 +1134,27 @@ def main():
             )
         )
 
-    print(
-        f"[INFO] New articles: {len(new_articles)}"
-    )
-
+    # الأقدم أولاً، ثم الأحدث
     new_articles.sort(
 
         key=lambda item:
-            item[0].get(
-                "published_parsed",
-                ()
+            get_article_datetime(
+                item[0]
             )
-            or
-            item[0].get(
-                "updated_parsed",
-                ()
+            or datetime.min.replace(
+                tzinfo=timezone.utc
             )
-            or ()
 
     )
 
     new_articles = new_articles[
         -MAX_ARTICLES_PER_RUN:
     ]
+
+    print(
+        f"[INFO] New articles to publish: "
+        f"{len(new_articles)}"
+    )
 
     published = 0
 
@@ -1072,10 +1200,6 @@ def main():
 
                 link=link
 
-            )
-
-            print(
-                "[AI] Success"
             )
 
         except Exception as error:
@@ -1129,7 +1253,7 @@ def main():
     )
 
     print(
-        "================================"
+        "========================================"
     )
 
     print(
@@ -1137,7 +1261,7 @@ def main():
     )
 
     print(
-        "================================"
+        "========================================"
     )
 
 
